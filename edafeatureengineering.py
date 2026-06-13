@@ -192,69 +192,60 @@ print("# BUSINESS JUSTIFICATION: is_subscriber — explicit commitment signal; r
 # LOGIC: A truly loyal customer comes back often AND doesn't need a discount to do so.
 #        Above-median purchase history = proven repeat behavior.
 #        No promo = organic motivation.
-prev_median = df['previous_purchases'].median()
-df['loyalty_freq'] = (
-    (df['previous_purchases'] > prev_median) &
-    (df['is_promo_dependent'] == 0)
-).astype(int)
+# ── LOYALTY DEFINITION 1: VALUE-BASED SCORE ──────────────
+# Signals: tenure + spend + satisfaction
+# BUSINESS JUSTIFICATION: Captures how long, how much, and how happy
+# Each signal normalized 0-1 so no single column dominates
 
-pct_loyal_freq = df['loyalty_freq'].mean() * 100
-avg_clv_loyal_freq = df[df['loyalty_freq'] == 1]['estimated_clv_proxy'].mean()
-avg_clv_nonloyal_freq = df[df['loyalty_freq'] == 0]['estimated_clv_proxy'].mean()
-avg_amt_loyal_freq = df[df['loyalty_freq'] == 1]['purchase_amount_usd'].mean()
-avg_amt_nonloyal_freq = df[df['loyalty_freq'] == 0]['purchase_amount_usd'].mean()
+df['tenure_score']       = normalize(df['previous_purchases'])
+df['spend_score']        = normalize(df['purchase_amount_usd'])
+df['satisfaction_score'] = normalize(df['review_rating'])
 
-print(f"\n=== LOYALTY DEFINITION 1: FREQUENCY-BASED ===")
-print(f"Formula: previous_purchases > {prev_median} AND promo_code_used == 'No'")
-print(f"Qualifying: {df['loyalty_freq'].sum()} customers ({pct_loyal_freq:.1f}%)")
-print(f"Avg CLV proxy  — Loyal: {avg_clv_loyal_freq:.2f}  |  Non-loyal: {avg_clv_nonloyal_freq:.2f}")
-print(f"Avg Purchase $ — Loyal: {avg_amt_loyal_freq:.2f}  |  Non-loyal: {avg_amt_nonloyal_freq:.2f}")
+df['loyalty_score_value'] = (
+    df['tenure_score'] +
+    df['spend_score'] +
+    df['satisfaction_score']
+) / 3
 
-# ── LOYALTY DEFINITION 2: SPEND-BASED ────────
+print(f"\n=== LOYALTY DEFINITION 1: VALUE-BASED SCORE ===")
+print(f"Formula: (tenure + spend + satisfaction) / 3")
+print(df['loyalty_score_value'].describe().round(4))
+print(f"Avg score - Top value_tier: {df[df['value_tier']=='High']['loyalty_score_value'].mean():.4f}")
+print(f"Avg score - Low value_tier: {df[df['value_tier']=='Low']['loyalty_score_value'].mean():.4f}")
 
-# FORMULA: estimated_clv_proxy >= 60th percentile AND satisfaction_flag == 1
-# LOGIC: A genuinely valuable customer spends above average AND is satisfied.
-#        CLV threshold ensures revenue relevance.
-#        Satisfaction flag filters out high-spend-but-dissatisfied customers who may churn.
-clv_60th = df['estimated_clv_proxy'].quantile(0.60)
-df['loyalty_spend'] = (
-    (df['estimated_clv_proxy'] >= clv_60th) &
-    (df['satisfaction_flag'] == 1)
-).astype(int)
+# ── LOYALTY DEFINITION 2: BEHAVIOR-BASED SCORE ───────────
+# Signals: frequency + tenure + promo independence
+# BUSINESS JUSTIFICATION: Captures how often, how long, and whether
+#   they buy without needing a discount — pure behavioral loyalty
 
-pct_loyal_spend = df['loyalty_spend'].mean() * 100
-avg_clv_loyal_spend = df[df['loyalty_spend'] == 1]['estimated_clv_proxy'].mean()
-avg_clv_nonloyal_spend = df[df['loyalty_spend'] == 0]['estimated_clv_proxy'].mean()
-avg_amt_loyal_spend = df[df['loyalty_spend'] == 1]['purchase_amount_usd'].mean()
-avg_amt_nonloyal_spend = df[df['loyalty_spend'] == 0]['purchase_amount_usd'].mean()
+df['frequency_score']    = normalize(df['purchase_freq_numeric'])
+df['promo_independence'] = 1 - df['is_promo_dependent']  # flip: 1 = organic buyer
 
-print(f"\n=== LOYALTY DEFINITION 2: SPEND-BASED ===")
-print(f"Formula: estimated_clv_proxy >= {clv_60th:.2f} (60th pct) AND satisfaction_flag == 1")
-print(f"Qualifying: {df['loyalty_spend'].sum()} customers ({pct_loyal_spend:.1f}%)")
-print(f"Avg CLV proxy  — Loyal: {avg_clv_loyal_spend:.2f}  |  Non-loyal: {avg_clv_nonloyal_spend:.2f}")
-print(f"Avg Purchase $ — Loyal: {avg_amt_loyal_spend:.2f}  |  Non-loyal: {avg_amt_nonloyal_spend:.2f}")
+df['loyalty_score_behavior'] = (
+    df['frequency_score'] +
+    df['tenure_score'] +
+    df['promo_independence']
+) / 3
 
-# ── WINNER ARGUMENT ───────────────────────────
+print(f"\n=== LOYALTY DEFINITION 2: BEHAVIOR-BASED SCORE ===")
+print(f"Formula: (frequency + tenure + promo_independence) / 3")
+print(df['loyalty_score_behavior'].describe().round(4))
+print(f"Avg score - Organic buyers:    {df[df['is_promo_dependent']==0]['loyalty_score_behavior'].mean():.4f}")
+print(f"Avg score - Promo buyers:      {df[df['is_promo_dependent']==1]['loyalty_score_behavior'].mean():.4f}")
 
-corr_freq  = df['loyalty_freq'].corr(df['estimated_clv_proxy'])
-corr_spend = df['loyalty_spend'].corr(df['estimated_clv_proxy'])
+# ── WINNER COMPARISON ─────────────────────────────────────
+corr1 = df['loyalty_score_value'].corr(df['estimated_clv_proxy'])
+corr2 = df['loyalty_score_behavior'].corr(df['estimated_clv_proxy'])
 
 print(f"\n=== LOYALTY DEFINITION COMPARISON ===")
-print(f"Correlation with CLV proxy — Freq-based:  {corr_freq:.4f}")
-print(f"Correlation with CLV proxy — Spend-based: {corr_spend:.4f}")
+print(f"Def 1 (Value-Based) correlation with CLV:    {corr1:.4f}")
+print(f"Def 2 (Behavior-Based) correlation with CLV: {corr2:.4f}")
+print(f"\nDistribution comparison:")
+print(df[['loyalty_score_value', 'loyalty_score_behavior']].describe().round(4))
 
-if abs(corr_freq) > abs(corr_spend):
-    winner = "loyalty_freq"
-    reason = "higher correlation with annualized revenue proxy"
-else:
-    winner = "loyalty_spend"
-    reason = "higher correlation with annualized revenue proxy"
-
-print(f"\n# WINNER: {winner} — {reason}")
-print("# ARGUMENT: loyalty_freq produces near-zero correlation (0.002) with CLV because")
-print("#   purchase frequency and previous_purchases are independent of spend amount in this dataset.")
-print("#   loyalty_spend captures customers who actually generate more revenue (CLV 2.8x higher),")
-print("#   making it the operationally relevant definition for retention strategy.")
+winner = "loyalty_score_value" if abs(corr1) > abs(corr2) else "loyalty_score_behavior"
+print(f"\n# WINNER: {winner}")
+print("# ARGUMENT: state this after you see the actual correlation numbers from output")
 
 # ── CUSTOMER SEGMENT LABEL ────────────────────
 
@@ -309,10 +300,15 @@ feature_cols = [
     'estimated_clv_proxy',
     'value_composite',
     'value_tier',
+    'tenure_score',
+    'spend_score',
+    'satisfaction_score',
+    'loyalty_score_value',
+    'frequency_score',
+    'promo_independence',
+    'loyalty_score_behavior',
     'satisfaction_flag',
     'is_subscriber',
-    'loyalty_freq',
-    'loyalty_spend',
     'customer_segment'
 ]
 
@@ -334,11 +330,31 @@ print(f"  estimated_clv_proxy     — min: {df['estimated_clv_proxy'].min()}, ma
 print(f"  value_composite         — min: {df['value_composite'].min():.4f}, max: {df['value_composite'].max():.4f}, mean: {df['value_composite'].mean():.4f}")
 print(f"  satisfaction_flag       — {df['satisfaction_flag'].sum()} satisfied ({df['satisfaction_flag'].mean()*100:.1f}%)")
 print(f"  is_subscriber           — {df['is_subscriber'].sum()} subscribers ({df['is_subscriber'].mean()*100:.1f}%)")
-print(f"  loyalty_freq            — {df['loyalty_freq'].sum()} loyal ({df['loyalty_freq'].mean()*100:.1f}%)")
-print(f"  loyalty_spend           — {df['loyalty_spend'].sum()} loyal ({df['loyalty_spend'].mean()*100:.1f}%)")
-
-
+print(f"  loyalty_score_value    — min: {df['loyalty_score_value'].min():.4f}, max: {df['loyalty_score_value'].max():.4f}, mean: {df['loyalty_score_value'].mean():.4f}")
+print(f"  loyalty_score_behavior — min: {df['loyalty_score_behavior'].min():.4f}, max: {df['loyalty_score_behavior'].max():.4f}, mean: {df['loyalty_score_behavior'].mean():.4f}")
 # ─────────────────────────────────────────────
+# ── LOYALTY SCORE COMPARISON TABLE ───────────
+loyalty_comparison = df.groupby('customer_segment').agg(
+    count=('customer_id', 'count'),
+    avg_loyalty_value_score=('loyalty_score_value', 'mean'),
+    avg_loyalty_behavior_score=('loyalty_score_behavior', 'mean'),
+    avg_clv=('estimated_clv_proxy', 'mean'),
+    avg_spend=('purchase_amount_usd', 'mean'),
+    promo_pct=('is_promo_dependent', 'mean')
+).round(4).reset_index()
+
+loyalty_comparison['promo_pct'] = (loyalty_comparison['promo_pct'] * 100).round(1)
+loyalty_comparison = loyalty_comparison.sort_values('avg_clv', ascending=False)
+
+print("\n=== LOYALTY SCORE COMPARISON BY SEGMENT ===")
+print(loyalty_comparison.to_string(index=False))
+
+corr1 = df['loyalty_score_value'].corr(df['estimated_clv_proxy'])
+corr2 = df['loyalty_score_behavior'].corr(df['estimated_clv_proxy'])
+print(f"\nDef 1 (Value-Based) correlation with CLV:    {corr1:.4f}")
+print(f"Def 2 (Behavior-Based) correlation with CLV: {corr2:.4f}")
+print(f"Winner: {'Def 1 Value-Based' if abs(corr1) > abs(corr2) else 'Def 2 Behavior-Based'}")
+
 # STEP 5: EXPORT
 # ─────────────────────────────────────────────
 
@@ -361,3 +377,4 @@ with pd.ExcelWriter('customer_analysis.xlsx', engine='openpyxl') as writer:
     seg_summary.to_excel(writer, sheet_name='Segment Summary', index=False)
 
 print("DONE. Files saved: cleaned_dataset.csv, customer_features.csv, customer_analysis.xlsx")
+loyalty_comparison.to_excel(writer, sheet_name='Loyalty Score Comparison', index=False)
